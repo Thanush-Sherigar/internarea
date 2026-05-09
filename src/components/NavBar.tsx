@@ -60,6 +60,7 @@ const NavBar = () => {
             <li><a href="/" className="text-gray-600 hover:text-blue-500">Internships</a></li>
             <li><a href="/" className="text-gray-600 hover:text-blue-500">Jobs</a></li>
             <li><a href="/public-space" className="text-gray-600 hover:text-blue-500 font-semibold text-blue-600">Public Space</a></li>
+            <li><a href="/pricing" className="text-gray-600 hover:text-blue-500 font-semibold text-blue-600">Pricing</a></li>
             <div>
               {isLoggedIn ? (
                 <div className="flex items-center gap-4">
