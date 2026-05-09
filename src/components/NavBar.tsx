@@ -73,12 +73,15 @@ const NavBar = () => {
                   </button>
                 </div>
               ) : (
-                <button
-                  onClick={handleLogin}
-                  className="bg-blue-500 text-white px-4 py-2 rounded"
-                >
-                  Login with Google
-                </button>
+                <div className="flex items-center gap-4">
+                  <a href="/forgot-password" className="text-sm text-blue-600 hover:underline font-medium">Forgot Password?</a>
+                  <button
+                    onClick={handleLogin}
+                    className="bg-blue-500 text-white px-4 py-2 rounded"
+                  >
+                    Login with Google
+                  </button>
+                </div>
               )}
             </div>
           </ul>
