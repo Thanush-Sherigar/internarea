@@ -7,6 +7,7 @@ import { toast } from 'react-toastify';
 import { useEffect, useState } from 'react';
 import { onAuthStateChanged } from "firebase/auth";
 import axios from 'axios';
+import { UAParser } from 'ua-parser-js';
 
 const NavBar = () => {
   const dispatch = useDispatch();
@@ -19,8 +20,14 @@ const NavBar = () => {
   const [loadingOtp, setLoadingOtp] = useState(false);
   const [currentLang, setCurrentLang] = useState('en');
 
+  // Login Environment Rules State
+  const [showLoginOtpModal, setShowLoginOtpModal] = useState(false);
+  const [pendingLoginUser, setPendingLoginUser] = useState<any>(null);
+  const [loginOtpInput, setLoginOtpInput] = useState('');
+  const [loadingLoginOtp, setLoadingLoginOtp] = useState(false);
+  const [testBypassMobile, setTestBypassMobile] = useState(false); // For testing mobile restrictions
+
   useEffect(() => {
-    // This function runs every time the app loads
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         dispatch(login({
@@ -32,11 +39,9 @@ const NavBar = () => {
         dispatch(logout());
       }
     });
-
-    return () => unsubscribe(); // Cleanup the listener
+    return () => unsubscribe();
   }, [dispatch]);
 
-  // Read current language from cookie on mount
   useEffect(() => {
     const match = document.cookie.match(/googtrans=\/en\/([a-zA-Z-]+)/);
     if (match && match[1]) {
@@ -44,24 +49,89 @@ const NavBar = () => {
     }
   }, []);
 
+  const dispatchAndLogHistory = async (user: any) => {
+    dispatch(login({
+      uid: user.uid,
+      name: user.name || user.displayName,
+      email: user.email,
+      photo: user.photo || user.photoURL
+    }));
+
+    toast.success("Welcome back!");
+
+    // Parse UA
+    const parser = new UAParser();
+    const result = parser.getResult();
+    
+    try {
+      await axios.post('http://localhost:5000/api/auth/log-history', {
+        email: user.email,
+        name: user.name || user.displayName,
+        os: result.os.name || 'Unknown OS',
+        browser: result.browser.name || 'Unknown Browser',
+        deviceType: result.device.type || 'desktop'
+      });
+    } catch (e) {
+      console.error("Failed to log history", e);
+    }
+  };
+
+  const checkMobileTimeRestriction = () => {
+    if (testBypassMobile) return true; // Bypass for testing
+
+    const now = new Date();
+    // Convert to IST (UTC + 5:30)
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const istTime = new Date(now.getTime() + now.getTimezoneOffset() * 60000 + istOffset);
+    const hours = istTime.getHours();
+
+    return hours >= 10 && hours < 13; // 10:00 AM to 1:00 PM (13:00)
+  };
+
   const handleLogin = async () => {
     try {
       const result = await signInWithPopup(auth, provider);
-      dispatch(login({
-        uid: result.user.uid,
-        name: result.user.displayName,
-        email: result.user.email,
-        photo: result.user.photoURL
-      }));
+      const user = result.user;
 
-      toast.success("Welcome back!");
+      const parser = new UAParser();
+      const uaResult = parser.getResult();
+      const deviceType = uaResult.device.type || 'desktop';
+      const browserName = uaResult.browser.name || 'Unknown';
+
+      // Rule 1: Mobile time restriction
+      if (deviceType === 'mobile') {
+        if (!checkMobileTimeRestriction()) {
+          toast.error("Mobile login is only allowed between 10:00 AM and 1:00 PM IST.");
+          return; // Block
+        }
+      }
+
+      // Rule 2: Chrome requires OTP
+      if (browserName === 'Chrome') {
+        setPendingLoginUser(user);
+        setShowLoginOtpModal(true);
+        // Request OTP automatically
+        toast.info("Chrome detected. Sending verification OTP...");
+        try {
+          const res = await axios.post('http://localhost:5000/api/otp/send', { email: user.email });
+          if (res.data.success) {
+            console.log("Login OTP Preview URL:", res.data.previewUrl);
+            alert(`OTP Sent to verify Chrome login!\nCheck the browser console to see the Ethereal Email preview URL.`);
+          }
+        } catch (e) {
+          toast.error("Failed to send OTP for Chrome verification.");
+        }
+        return; // Wait for OTP
+      }
+
+      // If passing rules and not Chrome, proceed directly
+      await dispatchAndLogHistory(user);
+
     } catch (error: any) {
       if (error.code === 'auth/popup-blocked') {
         alert('Popup was blocked. Please allow popups for this site.');
       } else if (error.code === 'auth/cancelled-popup-request') {
         alert('Cancelled popup request. Please try again.');
-      } else if (error.code === 'auth/configuration-not-found') {
-        alert('Firebase Auth is not configured correctly.');
       } else {
         alert('Login failed: ' + (error.message || 'Unknown error'));
       }
@@ -69,8 +139,30 @@ const NavBar = () => {
     }
   };
 
+  const handleVerifyLoginOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!loginOtpInput || !pendingLoginUser) return;
+    setLoadingLoginOtp(true);
+    try {
+      const response = await axios.post('http://localhost:5000/api/otp/verify', { 
+        email: pendingLoginUser.email, 
+        otp: loginOtpInput 
+      });
+      if (response.data.success) {
+        toast.success("Chrome login verified!");
+        setShowLoginOtpModal(false);
+        await dispatchAndLogHistory(pendingLoginUser);
+        setPendingLoginUser(null);
+      }
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || "Invalid OTP");
+    } finally {
+      setLoadingLoginOtp(false);
+    }
+  };
+
+  // ... (Language functions remain same)
   const applyLanguage = (lang: string) => {
-    // If selecting English and we were already in another language, just clear the cookie
     if (lang === 'en') {
       document.cookie = 'googtrans=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
     } else {
@@ -81,14 +173,9 @@ const NavBar = () => {
 
   const handleLanguageChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const lang = e.target.value;
-    
     if (lang === 'fr') {
-      // Secure French Verification
-      if (isLoggedIn && userInfo?.email) {
-        setEmailForOtp(userInfo.email);
-      } else {
-        setEmailForOtp(''); // They have to enter it manually
-      }
+      if (isLoggedIn && userInfo?.email) setEmailForOtp(userInfo.email);
+      else setEmailForOtp('');
       setOtpInput('');
       setShowLangOtpModal(true);
     } else {
@@ -97,16 +184,14 @@ const NavBar = () => {
   };
 
   const handleSendLangOtp = async () => {
-    if (!emailForOtp.trim()) {
-      return toast.error("Please enter a valid email address");
-    }
+    if (!emailForOtp.trim()) return toast.error("Please enter a valid email address");
     setLoadingOtp(true);
     try {
       const response = await axios.post('http://localhost:5000/api/otp/send', { email: emailForOtp });
       if (response.data.success) {
         toast.success("OTP sent to your email!");
-        console.log("OTP Preview URL for French Verification:", response.data.previewUrl);
-        alert(`OTP Sent for French language access!\nCheck the browser console to see the Ethereal Email preview URL.`);
+        console.log("Language OTP Preview URL:", response.data.previewUrl);
+        alert(`OTP Sent for French access!\nCheck console.`);
       }
     } catch (error: any) {
       toast.error(error.response?.data?.message || "Failed to send OTP");
@@ -167,7 +252,7 @@ const NavBar = () => {
                 {isLoggedIn ? (
                   <div className="flex items-center gap-4">
                     <img src={userInfo?.photo || 'https://ui-avatars.com/api/?name=User'} alt="User" className="w-8 h-8 rounded-full" />
-                    <span className="text-sm font-medium text-gray-700">{userInfo?.name}</span>
+                    <a href="/profile" className="text-sm font-medium text-gray-700 hover:text-blue-600">{userInfo?.name}</a>
                     <button
                       onClick={() => dispatch(logout())}
                       className="text-red-500 border border-red-500 px-3 py-1 rounded text-sm hover:bg-red-50 transition"
@@ -177,6 +262,10 @@ const NavBar = () => {
                   </div>
                 ) : (
                   <div className="flex items-center gap-4">
+                    <label className="flex items-center text-xs text-gray-500 cursor-pointer" title="Testing Toggle for Mobile 10AM-1PM Rule">
+                      <input type="checkbox" checked={testBypassMobile} onChange={(e) => setTestBypassMobile(e.target.checked)} className="mr-1" />
+                      Bypass Mobile Time Check
+                    </label>
                     <a href="/forgot-password" className="text-sm text-blue-600 hover:underline font-medium">Forgot Password?</a>
                     <button
                       onClick={handleLogin}
@@ -192,54 +281,44 @@ const NavBar = () => {
         </div>
       </nav>
 
-      {/* French OTP Verification Modal */}
+      {/* French Language OTP Modal */}
       {showLangOtpModal && (
         <div className="fixed inset-0 z-[100] overflow-y-auto flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-gray-900 bg-opacity-75 backdrop-blur-sm" onClick={() => setShowLangOtpModal(false)}></div>
-          <div className="relative bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full z-10 text-center transform transition-all">
-            <div className="w-16 h-16 bg-red-50 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4 border border-red-100">
-              <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
-            </div>
+          <div className="relative bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full z-10 text-center">
             <h2 className="text-xl font-bold text-gray-900 mb-2">Secure Language Access</h2>
             <p className="text-gray-500 text-sm mb-6">Accessing the French translation requires email verification.</p>
-            
             <div className="mb-4 text-left">
               <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">Email Address</label>
               <div className="flex gap-2">
-                <input 
-                  type="email" 
-                  value={emailForOtp} 
-                  onChange={(e) => setEmailForOtp(e.target.value)} 
-                  placeholder="Enter your email"
-                  className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 outline-none text-sm"
-                />
-                <button 
-                  type="button" 
-                  onClick={handleSendLangOtp}
-                  disabled={loadingOtp || !emailForOtp}
-                  className="bg-gray-100 text-gray-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-200 transition disabled:opacity-50"
-                >
-                  Send OTP
-                </button>
+                <input type="email" value={emailForOtp} onChange={(e) => setEmailForOtp(e.target.value)} placeholder="Enter email" className="flex-1 px-3 py-2 border border-gray-300 rounded-lg outline-none text-sm" />
+                <button type="button" onClick={handleSendLangOtp} disabled={loadingOtp || !emailForOtp} className="bg-gray-100 px-3 py-2 rounded-lg text-sm font-medium hover:bg-gray-200 disabled:opacity-50">Send OTP</button>
               </div>
             </div>
-
             <form onSubmit={handleVerifyLangOtp}>
-              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1 text-left">Enter 6-Digit OTP</label>
-              <input 
-                type="text" 
-                maxLength={6} 
-                required 
-                value={otpInput}
-                onChange={e => setOtpInput(e.target.value.replace(/\D/g, ''))}
-                className="w-full text-center text-2xl tracking-[0.5em] font-mono px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 outline-none mb-6"
-                placeholder="------"
-              />
-              <button type="submit" disabled={loadingOtp || otpInput.length !== 6} className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg shadow-md hover:bg-blue-700 disabled:opacity-50 transition">
-                {loadingOtp ? 'Verifying...' : 'Verify & Translate to French'}
-              </button>
+              <input type="text" maxLength={6} required value={otpInput} onChange={e => setOtpInput(e.target.value.replace(/\D/g, ''))} className="w-full text-center text-2xl tracking-[0.5em] font-mono px-4 py-2 border border-gray-300 rounded-lg outline-none mb-6" placeholder="------" />
+              <button type="submit" disabled={loadingOtp || otpInput.length !== 6} className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50">Verify & Translate</button>
             </form>
-            <button onClick={() => { setShowLangOtpModal(false); setCurrentLang('en'); }} className="mt-4 text-sm text-gray-500 hover:text-gray-800">Cancel</button>
+            <button onClick={() => { setShowLangOtpModal(false); setCurrentLang('en'); }} className="mt-4 text-sm text-gray-500">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Chrome Login OTP Modal */}
+      {showLoginOtpModal && pendingLoginUser && (
+        <div className="fixed inset-0 z-[100] overflow-y-auto flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-gray-900 bg-opacity-75 backdrop-blur-sm"></div>
+          <div className="relative bg-white rounded-2xl shadow-2xl p-8 max-w-sm w-full z-10 text-center">
+            <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mx-auto mb-4 border border-blue-100">
+              <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
+            </div>
+            <h2 className="text-xl font-bold text-gray-900 mb-2">Chrome Security Check</h2>
+            <p className="text-gray-500 text-sm mb-6">Since you are logging in via Google Chrome, we require an OTP sent to your email <strong>{pendingLoginUser.email}</strong>.</p>
+            <form onSubmit={handleVerifyLoginOtp}>
+              <input type="text" maxLength={6} required value={loginOtpInput} onChange={e => setLoginOtpInput(e.target.value.replace(/\D/g, ''))} className="w-full text-center text-2xl tracking-[0.5em] font-mono px-4 py-2 border border-gray-300 rounded-lg outline-none mb-6" placeholder="------" />
+              <button type="submit" disabled={loadingLoginOtp || loginOtpInput.length !== 6} className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50">Verify & Complete Login</button>
+            </form>
+            <button onClick={() => { setShowLoginOtpModal(false); setPendingLoginUser(null); }} className="mt-4 text-sm text-gray-500">Cancel Login</button>
           </div>
         </div>
       )}
