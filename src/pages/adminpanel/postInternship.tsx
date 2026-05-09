@@ -4,9 +4,9 @@ import {useRouter} from 'next/router';
 import { RootState } from '../../store/store';
 import NavBar from '../../components/NavBar';
 import axios from 'axios';
-const router=useRouter();
 const PostInternship=()=>{
-    const {userInfo,isLoggedIn}=useSelector((state: RootState)=>state.user);
+    const {isLoggedIn,userInfo,loading}=useSelector((state: RootState)=>state.user);
+    const router=useRouter();
     const[formData,setFormData]=useState({
         title:'',
         company:'',
@@ -14,8 +14,11 @@ const PostInternship=()=>{
         stipend:''
     });
     useEffect(()=>{
-        if(!isLoggedIn||userInfo?.email!=='thanush953@gmail.com'){
+        if(!loading){
+        if(!isLoggedIn||userInfo?.email!=='thanush53@gmail.com'){
+            console.log(userInfo?.email);
             router.push('/');
+        }
         }
     },[isLoggedIn,userInfo,router]);
 const handleSubmit=async(e:React.FormEvent)=>{

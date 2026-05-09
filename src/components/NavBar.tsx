@@ -57,8 +57,9 @@ const NavBar = () => {
         <div className="flex justify-between items-center">
           <div className="text-xl font-bold text-blue-500">Internshala</div>
           <ul className="flex space-x-4">
-            <li><a href="#" className="text-gray-600 hover:text-blue-500">Internships</a></li>
-            <li><a href="#" className="text-gray-600 hover:text-blue-500">Jobs</a></li>
+            <li><a href="/" className="text-gray-600 hover:text-blue-500">Internships</a></li>
+            <li><a href="/" className="text-gray-600 hover:text-blue-500">Jobs</a></li>
+            <li><a href="/public-space" className="text-gray-600 hover:text-blue-500 font-semibold text-blue-600">Public Space</a></li>
             <div>
               {isLoggedIn ? (
                 <div className="flex items-center gap-4">

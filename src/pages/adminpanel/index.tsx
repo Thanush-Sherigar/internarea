@@ -1,8 +1,7 @@
 import {useRouter} from 'next/router';
 import{useSelector} from 'react-redux';
-import {useEffect,useState} from 'react';
+import {useEffect} from 'react';
 import {RootState} from '../../store/store';
-import axios from 'axios';
 const AdminRoute=({children}:{children:React.ReactNode})=>{
     const router=useRouter();
     const{userInfo,isLoggedIn}=useSelector((state:RootState)=>state.user);
@@ -14,3 +13,4 @@ const AdminRoute=({children}:{children:React.ReactNode})=>{
     },[isLoggedIn,userInfo,router]);
     return<>{children}</>;
 };
+export default AdminRoute;
